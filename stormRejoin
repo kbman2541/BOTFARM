@@ -1,0 +1,201 @@
+-- Version : 1.5 (Final) + Auto Hop (Money Stagnant & Error Retry) --
+repeat
+    task.wait()
+until game:IsLoaded()
+task.wait(10)
+local DelaySend = 10
+
+local Players = game:GetService("Players")
+local Client = Players.LocalPlayer
+local HttpService = game:GetService("HttpService")
+local TeleportService = game:GetService("TeleportService")
+
+local _request = http_request or request or syn.request or xeno.request
+
+-- กำหนดตัวแปรสำหรับเช็คเงินไม่ขยับ
+local stagnantTime = 0
+local last_All_Money = -1
+local isHopping = false -- ป้องกันสคริปต์ทำงานซ้อนกันตอนกำลังวาร์ป
+
+-- สร้าง Blacklist สำหรับเก็บ JobID ที่เข้าไม่ได้ จะได้ไม่หาซ้ำ
+getgenv().AKB_FailedServers = getgenv().AKB_FailedServers or {}
+getgenv().AKB_FailedServers[game.JobId] = true
+
+local function FormatNumber(n)
+    local formatted = tostring(n)
+    local k
+    while true do
+        formatted, k = string.gsub(formatted, "^(-?%d+)(%d%d%d)", "%1,%2")
+        if k == 0 then break end
+    end
+    return formatted
+end
+
+local function GetMoney(_type)
+    local gui = Client.PlayerGui
+    local keyword = _type == "bank" and "bank balance" or "hand balance"
+    if gui then
+        for _, v in gui:GetDescendants() do
+            if v:IsA("TextLabel") and v.Text:lower():find(keyword:lower()) then
+                local rawText = v.Text
+                local numberText = rawText:gsub("[^%d]", "")
+                return tonumber(numberText) or 0
+            end
+        end
+    end
+    return 0
+end
+
+local function SendLog(description)
+    print(description)
+    local suss, message = pcall(function()
+        _request({
+            Url = "http://localhost:3030/api/accounts/description",
+            Method = "PUT",
+            Headers = { ["Content-Type"] = "application/json" },
+            Body = HttpService:JSONEncode({
+                username = Client.Name,
+                description = tostring(description)
+            })
+        })
+    end)
+    if not suss then warn("ข้อความล้มเหลว : "..message) end
+    return true
+end
+
+-- ระบบย้ายเซิฟและวนซ้ำ (Auto Retry ทะลุ Error 769)
+local function HopToLowPlayerServer()
+    if not _request then warn("❌ Executor ไม่รองรับ HTTP Request") return end
+    
+    print("⏳ กำลังค้นหาเซิร์ฟเวอร์คนน้อย...")
+    task.spawn(function()
+        local placeId = game.PlaceId
+        local cursor, searchedPages, maxPages = "", 0, 10
+        local candidates = {}
+        
+        while searchedPages < maxPages do
+            searchedPages = searchedPages + 1
+            local url = "https://games.roblox.com/v1/games/" .. placeId .. "/servers/Public?sortOrder=Asc&limit=100"
+            if cursor and cursor ~= "" then url = url .. "&cursor=" .. cursor end
+            
+            local success, response = pcall(function() return _request({Url = url, Method = "GET"}) end)
+            if success and response and response.Body then
+                local body = HttpService:JSONDecode(response.Body)
+                if body and body.data then
+                    for _, v in ipairs(body.data) do
+                        if type(v) == "table" and v.id and not getgenv().AKB_FailedServers[v.id] then
+                            local playing = v.playing or 0
+                            local ping = v.ping or 999
+                            
+                            if playing >= 1 and playing <= 4 and ping > 0 and ping <= 120 then
+                                table.insert(candidates, {id = v.id, ping = ping, players = playing})
+                            end
+                        end
+                    end
+                    if #candidates >= 20 then break end
+                    if body.nextPageCursor then
+                        cursor = body.nextPageCursor
+                    else break end
+                end
+            else break end
+        end
+        
+        if #candidates > 0 then
+            table.sort(candidates, function(a, b) return a.ping < b.ping end)
+            
+            if #candidates > 5 then
+                local topCandidates = {}
+                for i = 1, 5 do table.insert(topCandidates, candidates[i]) end
+                candidates = topCandidates
+            end
+            
+            for i = #candidates, 2, -1 do
+                local j = math.random(1, i)
+                candidates[i], candidates[j] = candidates[j], candidates[i]
+            end
+            
+            local currentAttempt = 1
+            if getgenv().AKB_TPConnection then getgenv().AKB_TPConnection:Disconnect() end
+            
+            local function attemptTeleport()
+                if currentAttempt > #candidates then
+                    print("❌ ห้องที่เจอเข้าไม่ได้เลย จะทำการสแกนหาหน้าใหม่...")
+                    if getgenv().AKB_TPConnection then getgenv().AKB_TPConnection:Disconnect(); getgenv().AKB_TPConnection = nil end
+                    task.wait(2)
+                    HopToLowPlayerServer() 
+                    return
+                end
+                
+                local targetServer = candidates[currentAttempt]
+                print("🚀 กำลังพยายามวาร์ปไปห้อง " .. targetServer.players .. " คน (ปิง: "..targetServer.ping..")")
+                TeleportService:TeleportToPlaceInstance(placeId, targetServer.id, Client)
+            end
+            
+            getgenv().AKB_TPConnection = TeleportService.TeleportInitFailed:Connect(function(player, teleportResult, errorMessage)
+                if player == Client then
+                    if candidates[currentAttempt] then 
+                        getgenv().AKB_FailedServers[candidates[currentAttempt].id] = true 
+                    end
+                    print("⚠️ วาร์ปล้มเหลว ลองห้องถัดไป...")
+                    currentAttempt = currentAttempt + 1
+                    task.wait(1.5)
+                    attemptTeleport()
+                end
+            end)
+            
+            task.delay(45, function() 
+                if getgenv().AKB_TPConnection then getgenv().AKB_TPConnection:Disconnect(); getgenv().AKB_TPConnection = nil end 
+            end)
+            
+            attemptTeleport()
+        else
+            print("❌ ไม่พบห้องที่เหมาะสม จะหาใหม่ใน 5 วินาที...")
+            task.wait(5)
+            HopToLowPlayerServer()
+        end
+    end)
+end
+
+_G.CoreSendLog = true
+task.spawn(function()
+    while _G.CoreSendLog do task.wait()
+        if isHopping then
+            task.wait(1)
+            continue
+        end
+
+        local Money_hand = tonumber(GetMoney("hand")) or 0
+        local Money_bank = tonumber(GetMoney("bank")) or 0
+        local All_Money = Money_hand + Money_bank
+
+        -- ตั้งค่าเงินเริ่มต้นสำหรับรอบแรก
+        if last_All_Money == -1 then
+            last_All_Money = All_Money
+        end
+
+        SendLog(string.format("💸 Total: %s | 💵 Hand: %s | 🏦 Bank: %s",
+            FormatNumber(All_Money),
+            FormatNumber(Money_hand), 
+            FormatNumber(Money_bank)
+        ))
+        
+        -- ตรวจสอบว่าเงินไม่ขึ้นและไม่ลง
+        if All_Money == last_All_Money then
+            stagnantTime = stagnantTime + DelaySend
+            print("⚠️ ยอดเงินไม่มีการเปลี่ยนแปลง (" .. stagnantTime .. "/60 วินาที)")
+            
+            if stagnantTime >= 60 then
+                isHopping = true
+                SendLog("🔄 ยอดเงินค้าง ไม่ขึ้น/ไม่ลง ครบ 1 นาที! เริ่มทำการย้ายเซิร์ฟเวอร์...")
+                HopToLowPlayerServer()
+                stagnantTime = 0 
+            end
+        else
+            -- ถ้ายอดเงินมีการเปลี่ยนแปลง ให้บันทึกยอดใหม่และรีเซ็ตเวลาการรอ
+            last_All_Money = All_Money
+            stagnantTime = 0
+        end
+        
+        task.wait(DelaySend or 10)
+    end
+end)
