@@ -1,4 +1,4 @@
--- Version : 1.7 (Final) + Auto Hop (Money Stagnant + Match + Auto Retry) - No External Log --
+-- Version : 1.7 (Final) + Auto Hop (Money Stagnant + Match + Idle/AFK Retry) --
 repeat
     task.wait()
 until game:IsLoaded()
@@ -14,7 +14,10 @@ local _request = http_request or request or syn.request or xeno.request
 
 local stagnantTime = 0
 local matchTime = 0
+local idleTime = 0 -- ตัวจับเวลายืนนิ่ง
+local maxIdleTime = 3600 -- 60 นาที = 3600 วินาที
 local last_All_Money = -1
+local lastPosition = nil -- เก็บตำแหน่งล่าสุด
 local isHopping = false -- ป้องกันสคริปต์ทำงานซ้อนกันตอนกำลังวาร์ป
 
 -- สร้าง Blacklist สำหรับเก็บ JobID ที่เข้าไม่ได้ จะได้ไม่หาซ้ำ
@@ -46,9 +49,21 @@ local function GetMoney(_type)
     return 0
 end
 
--- ลบการส่ง API ไปภายนอกออก เหลือแค่ Print แจ้งเตือนใน Console
 local function SendLog(description)
     print(description)
+    local suss, message = pcall(function()
+        _request({
+            Url = "http://localhost:3030/api/accounts/description",
+            Method = "PUT",
+            Headers = { ["Content-Type"] = "application/json" },
+            Body = HttpService:JSONEncode({
+                username = Client.Name,
+                description = tostring(description)
+            })
+        })
+    end)
+    if not suss then warn("ข้อความล้มเหลว : "..message) end
+    return true
 end
 
 -- ระบบย้ายเซิฟและวนซ้ำ (Auto Retry ทะลุ Error 769 และห้องเต็ม)
@@ -60,7 +75,7 @@ local function HopToLowPlayerServer()
         local placeId = game.PlaceId
         local cursor, searchedPages, maxPages = "", 0, 10
         local candidates = {}
-        local backup_candidates = {} -- สำรองเผื่อไม่มีห้องคนน้อยกว่า 5
+        local backup_candidates = {} 
         
         while searchedPages < maxPages do
             searchedPages = searchedPages + 1
@@ -80,12 +95,11 @@ local function HopToLowPlayerServer()
                                 if playing <= 4 then
                                     table.insert(candidates, {id = v.id, ping = ping, players = playing})
                                 end
-                                -- เก็บสำรองไว้เสมอ เผื่อไม่มีห้องคนน้อยจริงๆ
                                 table.insert(backup_candidates, {id = v.id, ping = ping, players = playing})
                             end
                         end
                     end
-                    if #candidates >= 10 then break end -- ได้เป้าหมายพอแล้วหยุดหาทันที
+                    if #candidates >= 10 then break end
                     if body.nextPageCursor then
                         cursor = body.nextPageCursor
                     else break end
@@ -96,13 +110,11 @@ local function HopToLowPlayerServer()
             end
         end
         
-        -- แก้ปัญหาห้องไม่มีคนน้อยกว่า 5 โดยใช้รายชื่อสำรอง
         if #candidates == 0 and #backup_candidates > 0 then
             candidates = backup_candidates
         end
         
         if #candidates > 0 then
-            -- เรียงจากคนน้อยที่สุดและปิงต่ำสุด
             table.sort(candidates, function(a, b) 
                 if a.players == b.players then return a.ping < b.ping end
                 return a.players < b.players
@@ -127,14 +139,13 @@ local function HopToLowPlayerServer()
                     print("❌ ห้องที่เจอเข้าไม่ได้เลย จะทำการสแกนหาหน้าเว็บใหม่...")
                     if getgenv().AKB_TPConnection then getgenv().AKB_TPConnection:Disconnect(); getgenv().AKB_TPConnection = nil end
                     task.wait(2)
-                    HopToLowPlayerServer() -- วนหารอบใหม่จนกว่าจะได้
+                    HopToLowPlayerServer() 
                     return
                 end
                 
                 local targetServer = candidates[currentAttempt]
                 print("🚀 กำลังพยายามวาร์ปไปห้อง " .. targetServer.players .. " คน (ปิง: "..targetServer.ping..")")
                 
-                -- กัน Error ค้างตอน Teleport
                 local s, e = pcall(function()
                     TeleportService:TeleportToPlaceInstance(placeId, targetServer.id, Client)
                 end)
@@ -193,20 +204,17 @@ task.spawn(function()
             FormatNumber(Money_bank)
         ))
         
-        -- เงื่อนไขที่ 1: เงินตรงตามเป้าเป๊ะ 
+        -- ระบบเช็ค 1: เงื่อนไขตามรูปภาพ (ยอดเป๊ะ)
         local isMatchTarget = (All_Money == 2000 and Money_hand == 1000 and Money_bank == 1000)
-        -- เงื่อนไขที่ 2: เงินค้าง ไม่ขึ้นไม่ลง
-        local isStagnant = (All_Money == last_All_Money)
-
-        -- เช็คเงื่อนไขที่ 1
         if isMatchTarget then
             matchTime = matchTime + DelaySend
-            print("⚠️ [เงื่อนไขเป้าหมาย] ยอดเงินตรง (" .. matchTime .. "/60 วิ)")
+            print("⚠️ [เงื่อนไขรูปภาพ] ยอดเงินตรง (" .. matchTime .. "/60 วิ)")
         else
             matchTime = 0
         end
 
-        -- เช็คเงื่อนไขที่ 2
+        -- ระบบเช็ค 2: เงินค้าง ไม่ขึ้นไม่ลง
+        local isStagnant = (All_Money == last_All_Money)
         if isStagnant then
             stagnantTime = stagnantTime + DelaySend
             print("⚠️ [เงินค้าง] ยอดไม่มีการเปลี่ยนแปลง (" .. stagnantTime .. "/60 วิ)")
@@ -215,13 +223,41 @@ task.spawn(function()
             stagnantTime = 0
         end
 
-        -- ถ้าระบบจับได้ว่าอันใดอันหนึ่งถึง 1 นาที ก็จะย้ายทันที
-        if matchTime >= 60 or stagnantTime >= 60 then
+        -- ระบบเช็ค 3: ตรวจจับการเคลื่อนที่ 10 studs ใน 60 นาที
+        local currentPos = nil
+        if Client.Character and Client.Character:FindFirstChild("HumanoidRootPart") then
+            currentPos = Client.Character.HumanoidRootPart.Position
+        end
+
+        if currentPos then
+            if lastPosition == nil then
+                lastPosition = currentPos
+            else
+                local distance = (currentPos - lastPosition).Magnitude
+                if distance <= 10 then
+                    idleTime = idleTime + DelaySend
+                    print("⚠️ [ยืนนิ่ง] ไม่เคลื่อนที่เกิน 10 studs (" .. idleTime .. "/" .. maxIdleTime .. " วิ)")
+                else
+                    -- ถ้าขยับเกิน 10 studs ให้รีเซ็ตเวลาใหม่
+                    idleTime = 0
+                    lastPosition = currentPos
+                end
+            end
+        end
+
+        -- สรุปเงื่อนไข: หากอย่างใดอย่างหนึ่งเข้าเป้า จะสั่งย้ายทันที
+        local isIdleTimeout = (idleTime >= maxIdleTime)
+
+        if matchTime >= 60 or stagnantTime >= 60 or isIdleTimeout then
             isHopping = true
-            SendLog("🔄 เงื่อนไขครบ 1 นาที! เริ่มทำการย้ายเซิร์ฟเวอร์...")
+            SendLog("🔄 เงื่อนไขครบกำหนด (เป้าหมาย/เงินค้าง/ยืนนิ่ง)! เริ่มทำการย้ายเซิร์ฟเวอร์...")
             HopToLowPlayerServer()
+            
+            -- รีเซ็ตค่าทั้งหมดเพื่อเตรียมพร้อมสำหรับเซิร์ฟใหม่
             matchTime = 0
-            stagnantTime = 0 
+            stagnantTime = 0
+            idleTime = 0
+            lastPosition = nil 
         end
         
         task.wait(DelaySend or 10)
