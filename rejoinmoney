@@ -1,4 +1,4 @@
--- Version : 1.7 (Final) + Auto Hop (Money Stagnant + Match + Idle/AFK Retry) --
+-- Version : 1.8 (Final) + Auto Hop (Specific Reason Logs) --
 repeat
     task.wait()
 until game:IsLoaded()
@@ -14,13 +14,12 @@ local _request = http_request or request or syn.request or xeno.request
 
 local stagnantTime = 0
 local matchTime = 0
-local idleTime = 0 -- ตัวจับเวลายืนนิ่ง
+local idleTime = 0 
 local maxIdleTime = 3600 -- 60 นาที = 3600 วินาที
 local last_All_Money = -1
-local lastPosition = nil -- เก็บตำแหน่งล่าสุด
-local isHopping = false -- ป้องกันสคริปต์ทำงานซ้อนกันตอนกำลังวาร์ป
+local lastPosition = nil 
+local isHopping = false 
 
--- สร้าง Blacklist สำหรับเก็บ JobID ที่เข้าไม่ได้ จะได้ไม่หาซ้ำ
 getgenv().AKB_FailedServers = getgenv().AKB_FailedServers or {}
 getgenv().AKB_FailedServers[game.JobId] = true
 
@@ -204,26 +203,24 @@ task.spawn(function()
             FormatNumber(Money_bank)
         ))
         
-        -- ระบบเช็ค 1: เงื่อนไขตามรูปภาพ (ยอดเป๊ะ)
+        -- เช็ค 1: เงื่อนไขตามรูปภาพ (ยอดเป๊ะ)
         local isMatchTarget = (All_Money == 2000 and Money_hand == 1000 and Money_bank == 1000)
         if isMatchTarget then
             matchTime = matchTime + DelaySend
-            print("⚠️ [เงื่อนไขรูปภาพ] ยอดเงินตรง (" .. matchTime .. "/60 วิ)")
         else
             matchTime = 0
         end
 
-        -- ระบบเช็ค 2: เงินค้าง ไม่ขึ้นไม่ลง
+        -- เช็ค 2: เงินค้าง ไม่ขึ้นไม่ลง
         local isStagnant = (All_Money == last_All_Money)
         if isStagnant then
             stagnantTime = stagnantTime + DelaySend
-            print("⚠️ [เงินค้าง] ยอดไม่มีการเปลี่ยนแปลง (" .. stagnantTime .. "/60 วิ)")
         else
             last_All_Money = All_Money
             stagnantTime = 0
         end
 
-        -- ระบบเช็ค 3: ตรวจจับการเคลื่อนที่ 10 studs ใน 60 นาที
+        -- เช็ค 3: ตรวจจับการเคลื่อนที่ 10 studs ใน 60 นาที
         local currentPos = nil
         if Client.Character and Client.Character:FindFirstChild("HumanoidRootPart") then
             currentPos = Client.Character.HumanoidRootPart.Position
@@ -236,24 +233,29 @@ task.spawn(function()
                 local distance = (currentPos - lastPosition).Magnitude
                 if distance <= 10 then
                     idleTime = idleTime + DelaySend
-                    print("⚠️ [ยืนนิ่ง] ไม่เคลื่อนที่เกิน 10 studs (" .. idleTime .. "/" .. maxIdleTime .. " วิ)")
                 else
-                    -- ถ้าขยับเกิน 10 studs ให้รีเซ็ตเวลาใหม่
                     idleTime = 0
                     lastPosition = currentPos
                 end
             end
         end
 
-        -- สรุปเงื่อนไข: หากอย่างใดอย่างหนึ่งเข้าเป้า จะสั่งย้ายทันที
-        local isIdleTimeout = (idleTime >= maxIdleTime)
+        -- สรุปเงื่อนไขและระบุสาเหตุการย้าย
+        local hopReason = ""
+        if matchTime >= 60 then
+            hopReason = "ยอดเงินตรงเป้าหมาย (Total 2K, Hand 1K, Bank 1K)"
+        elseif stagnantTime >= 60 then
+            hopReason = "เงินค้าง ไม่มีการเปลี่ยนแปลงใน 1 นาที"
+        elseif idleTime >= maxIdleTime then
+            hopReason = "ยืนนิ่ง AFK นานเกิน 60 นาที"
+        end
 
-        if matchTime >= 60 or stagnantTime >= 60 or isIdleTimeout then
+        if hopReason ~= "" then
             isHopping = true
-            SendLog("🔄 เงื่อนไขครบกำหนด (เป้าหมาย/เงินค้าง/ยืนนิ่ง)! เริ่มทำการย้ายเซิร์ฟเวอร์...")
+            SendLog("🔄 ย้ายเซิร์ฟเวอร์เนื่องจาก: " .. hopReason)
             HopToLowPlayerServer()
             
-            -- รีเซ็ตค่าทั้งหมดเพื่อเตรียมพร้อมสำหรับเซิร์ฟใหม่
+            -- รีเซ็ตค่าทั้งหมด
             matchTime = 0
             stagnantTime = 0
             idleTime = 0
