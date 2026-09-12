@@ -1,4 +1,4 @@
--- Version : 1.8 (Final) + Auto Hop (Specific Reason Logs) --
+-- Version : 1.9 (Final) + Auto Hop (Silent Money Check) --
 repeat
     task.wait()
 until game:IsLoaded()
@@ -196,12 +196,6 @@ task.spawn(function()
         if last_All_Money == -1 then
             last_All_Money = All_Money
         end
-
-        SendLog(string.format("💸 Total: %s | 💵 Hand: %s | 🏦 Bank: %s",
-            FormatNumber(All_Money),
-            FormatNumber(Money_hand), 
-            FormatNumber(Money_bank)
-        ))
         
         -- เช็ค 1: เงื่อนไขตามรูปภาพ (ยอดเป๊ะ)
         local isMatchTarget = (All_Money == 2000 and Money_hand == 1000 and Money_bank == 1000)
