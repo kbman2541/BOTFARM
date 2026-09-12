@@ -238,8 +238,8 @@ task.spawn(function()
         local hopReason = ""
         if matchTime >= 60 then
             hopReason = "ยอดเงินตรงเป้าหมาย (Total 2K, Hand 1K, Bank 1K)"
-        elseif stagnantTime >= 60 then
-            hopReason = "เงินค้าง ไม่มีการเปลี่ยนแปลงใน 1 นาที"
+        elseif stagnantTime >= 120 then
+            hopReason = "เงินค้าง ไม่มีการเปลี่ยนแปลงใน 2 นาที"
         elseif idleTime >= maxIdleTime then
             hopReason = "ยืนนิ่ง AFK นานเกิน 60 นาที"
         end
